@@ -11,3 +11,4 @@ airflow.cfg
 airflow.db
 /env
 /env/bin
+docker-compose.yml
