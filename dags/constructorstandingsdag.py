@@ -15,7 +15,7 @@ default_args = {
 }
 
 ## DAG
-with DAG(dag_id='f1_standings_etl_pipeline_mongodb',
+with DAG(dag_id='f1_constructor_standings_etl_pipeline_mongodb',
          default_args=default_args,
          schedule_interval='@weekly',
          catchup=False) as dag:
@@ -23,12 +23,11 @@ with DAG(dag_id='f1_standings_etl_pipeline_mongodb',
     @task()
     def extract_standings():
         ergast = Ergast()
-        standings = ergast.get_driver_standings(YEAR).content
+        standings = ergast.get_constructor_standings(YEAR).content
         combined_standings = pd.concat(standings, ignore_index=True)
 
-        combined_standings['constructorName'] = combined_standings['constructorNames'].apply(lambda name: name[0] if name else None)
-        current_standings = combined_standings.loc[:, ['position', 'positionText', 'givenName', 'familyName', 'points', 'wins', 'driverId', 'driverNumber', 'constructorName']].dropna(subset=['driverNumber'])
-        current_standings = current_standings.drop_duplicates(subset=['driverNumber'], keep='first')
+        current_standings = combined_standings.loc[:, ['position', 'positionText', 'points', 'wins', 'constructorName', 'constructorId']]
+        current_standings = current_standings.drop_duplicates(subset=['constructorId'], keep='first')
 
         return current_standings.to_json(orient="records")
 
@@ -38,21 +37,20 @@ with DAG(dag_id='f1_standings_etl_pipeline_mongodb',
         mongo_hook = MongoHook(conn_id=MONGO_CONN_ID)
         client = mongo_hook.get_conn()
         db = client['pitlap']
-        collection = db['driver_standings']
+        collection = db['constructor_standings']
 
         for standing in current_standings:
             # Convert numeric fields to appropriate types
             standing['position'] = int(standing['position'])
             standing['points'] = float(standing['points'])
             standing['wins'] = int(standing['wins'])
-            standing['driverNumber'] = int(standing['driverNumber'])
 
             # Add timestamp
             standing['timestamp'] = pd.Timestamp.now()
 
             # Upsert the document
             collection.update_one(
-                {'driverNumber': standing['driverNumber']},
+                {'constructorId': standing['constructorId']},
                 {'$set': standing},
                 upsert=True
             )
