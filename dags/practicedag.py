@@ -13,6 +13,18 @@ default_args = {
 CACHE_DIR = '/opt/airflow/cache/f1'
 MONGO_CONN_ID = 'mongo_default'
 
+def get_param(context, key):
+    value = context['dag_run'].conf.get(key)
+    if not value:
+        raise ValueError(f"Missing required parameter: {key}")
+    return int(value)
+
+def get_string_param(context, key):
+    value = context['dag_run'].conf.get(key)
+    if not value:
+        raise ValueError(f"Missing required parameter: {key}")
+    return str(value)
+
 with DAG(
     dag_id='f1_practice_laps_etl_pipeline',
     default_args=default_args,
@@ -21,27 +33,22 @@ with DAG(
     params={
         "year": 2025,
         "round": 4,
-        "session_name": "Practice 3"
+        "session_name": "Practice 1"
     }
 ) as dag:
 
-
     @task()
     def validate_params(**context):
-        year = context['dag_run'].conf.get('year')
-        round_ = context['dag_run'].conf.get('round')
-        session_name = context['dag_run'].conf.get('session_name', 'Practice 3')
-
-        if not year or not round_:
-            raise ValueError(f"Missing required parameters: {'year' if not year else ''} {'round' if not round_ else ''}")
-
-        return year, round_, session_name
+        return {
+            'year': get_param(context, 'year'),
+            'round': get_param(context, 'round'),
+            'session_name': get_string_param(context, 'session_name')
+        }
 
     @task()
-    def extract_practice_laps(year, round_, session_name):
+    def extract_practice_laps(parameters: dict):
         try:
-            fastf1.Cache.enable_cache(CACHE_DIR)            
-            session = fastf1.get_session(year, round_, session_name)
+            session = fastf1.get_session(parameters["year"], parameters["round"], parameters["session_name"])
             session.load()
 
             def format_timedelta(td):
@@ -70,9 +77,9 @@ with DAG(
                 })
 
             return {
-                "year": year,
-                "round": round_,
-                "sessionName": session_name,
+                "year": parameters["year"],
+                "round": parameters["round"],
+                "sessionName":  parameters["session_name"],
                 "eventFormat": session.event['EventFormat'],
                 "laps": lap_data
             }
@@ -95,7 +102,5 @@ with DAG(
         }
         collection.update_one(query, {"$set": data}, upsert=True)
 
-    year, round_, session_name = validate_params()
-
-    lap_data = extract_practice_laps(year, round_, session_name)
+    lap_data = extract_practice_laps(validate_params())
     load_to_mongodb(lap_data)

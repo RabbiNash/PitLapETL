@@ -73,17 +73,16 @@ with DAG(
     @task()
     def load_standings(mapped_data_json):
         mapped_data = json.loads(mapped_data_json)
+
         mongo_hook = MongoHook(conn_id=MONGO_CONN_ID)
         client = mongo_hook.get_conn()
         db = client['pitlap']
         collection = db['driver_standings']
 
-        for standing in mapped_data:
-            collection.update_one(
-                {'driverId': standing['driverId']},
-                {'$set': standing},
-                upsert=True
-            )
+        collection.delete_many({})
+
+        if mapped_data:
+            collection.insert_many(mapped_data)
 
     data = extract_standings()
     load_standings(data)
