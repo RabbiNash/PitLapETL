@@ -3,6 +3,7 @@ from airflow.decorators import task
 from airflow.utils.dates import days_ago
 from airflow.providers.mongo.hooks.mongo import MongoHook
 import fastf1
+from datetime import timedelta
 import pandas as pd
 
 default_args = {
@@ -29,6 +30,7 @@ with DAG(
     default_args=default_args,
     schedule_interval=None,
     catchup=False,
+    dagrun_timeout=timedelta(minutes=30),
     params={
         "year": 2025,
         "round": 4,
