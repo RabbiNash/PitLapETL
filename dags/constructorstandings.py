@@ -20,7 +20,6 @@ def map_data(original_data):
     for standing in original_data["MRData"]["StandingsTable"]["StandingsLists"][0]["ConstructorStandings"]:
         constructor = standing["Constructor"]
 
-        # Safely retrieve values with defaults
         position = standing.get("position", "Unknown")
         position_text = standing.get("positionText", "Unknown")
         points = standing.get("points", 0)
@@ -51,12 +50,11 @@ with DAG(
     @task()
     def extract_standings():
         response = requests.get(API_URL)
-        response.raise_for_status()  # Raise exception on bad response
+        response.raise_for_status()
         raw_data = response.json()
 
-        # Transform the data using your mapping logic
         mapped_data = map_data(raw_data)
-        return json.dumps(mapped_data)  # Return as JSON string for XCom
+        return json.dumps(mapped_data)
 
     @task()
     def load_standings(mapped_data_json):
@@ -66,12 +64,10 @@ with DAG(
         db = client['pitlap']
         collection = db['constructor_standings']
 
-        for standing in mapped_data:
-            collection.update_one(
-                {'constructorId': standing['constructorId']},
-                {'$set': standing},
-                upsert=True
-            )
+        collection.delete_many({})
+
+        if mapped_data:
+            collection.insert_many(mapped_data)
 
     data = extract_standings()
     load_standings(data)

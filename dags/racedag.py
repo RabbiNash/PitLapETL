@@ -10,46 +10,46 @@ default_args = {
 }
 
 MONGO_CONN_ID = 'mongo_default'
-CACHE_DIR = '/opt/airflow/cache/f1'
+
+def get_param(context, key):
+    value = context['dag_run'].conf.get(key)
+    if not value:
+        raise ValueError(f"Missing required parameter: {key}")
+    return value
 
 with DAG(
     dag_id='f1_race_results_etl_pipeline',
     default_args=default_args,
     schedule_interval=None,
     catchup=False,
+    tags=['f1', 'etl'],
+    params={
+        "year": 2025,
+        "round": 4,
+    }
 ) as dag:
 
-    @task()
+    @task
     def validate_params(**context):
-        year = context['dag_run'].conf.get('year')
-        round_ = context['dag_run'].conf.get('round')
+        return {
+            'year': int(get_param(context, 'year')),
+            'round': int(get_param(context, 'round'))
+        }
 
-        if not year or not round_:
-            raise ValueError(f"Missing required parameters: {'year' if not year else ''} {'round' if not round_ else ''}")
-
-        return year, round_
-
-    @task()
-    def extract_race_results(year, round_, **context):
+    @task
+    def extract_race_results(parameters: dict, **context):
         try:
-            fastf1.Cache.enable_cache(CACHE_DIR)
+            schedule = fastf1.get_event_schedule(parameters['year'])
+            event = schedule.loc[schedule['RoundNumber'] == parameters['round']].iloc[0]
 
-            schedule = fastf1.get_event_schedule(year)
-            event = schedule.loc[schedule['RoundNumber'] == round_].iloc[0]
-
-            event_data = {
-                'key': f"{year}_{round_}",
-                'eventName': event['EventName'],
-                'eventFormat': event['EventFormat']
-            }
-
-            session = fastf1.get_session(year, event['EventName'], 'R')
+            session = fastf1.get_session(parameters['year'], event['EventName'], 'R')
             session.load()
 
-            results = session.results.loc[:, ['FullName', 'HeadshotUrl', 'Position', 'TeamName', 'ClassifiedPosition', 'GridPosition', 'Points']]
-
-            event_data['results'] = [
-                {
+            return {
+                'key': f"{parameters['year']}_{parameters['round']}",
+                'eventName': event['EventName'],
+                'eventFormat': event['EventFormat'],
+                'results': [{
                     'teamName': row['TeamName'],
                     'headshotURL': row['HeadshotUrl'],
                     'position': int(row['Position']),
@@ -57,26 +57,19 @@ with DAG(
                     'classifiedPosition': row['ClassifiedPosition'],
                     'points': int(row['Points']),
                     'gridPosition': int(row['GridPosition'])
-                }
-                for _, row in results.iterrows()
-            ]
-
-            return event_data
+                } for _, row in session.results.iterrows()]
+            }
 
         except Exception as e:
-            raise RuntimeError(f"Unable to load race results for Round {round_} in {year}: {str(e)}")
+            raise RuntimeError(f"Extraction failed: {str(e)}")
 
-    @task()
+    @task
     def load_to_mongodb(data: dict):
-        mongo_hook = MongoHook(conn_id=MONGO_CONN_ID)
-        client = mongo_hook.get_conn()
-        db = client['pitlap']
-        collection = db['race_results']
+        MongoHook(conn_id=MONGO_CONN_ID).get_conn() \
+            .pitlap.race_results.update_one(
+                {"key": data["key"]},
+                {"$set": data},
+                upsert=True
+            )
 
-        query = {"key": data["key"]}
-        collection.update_one(query, {"$set": data}, upsert=True)
-
-    year, round_ = validate_params()
-
-    race_data = extract_race_results(year, round_)
-    load_to_mongodb(race_data)
+    load_to_mongodb(extract_race_results(validate_params()))

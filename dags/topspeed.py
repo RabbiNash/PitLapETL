@@ -10,7 +10,6 @@ default_args = {
     'start_date': days_ago(1),
 }
 
-CACHE_DIR = '/opt/airflow/cache/f1'
 MONGO_CONN_ID = 'mongo_default'
 
 def get_param(context, key):
@@ -26,7 +25,7 @@ def get_string_param(context, key):
     return str(value)
 
 with DAG(
-    dag_id='f1_practice_laps_etl_pipeline',
+    dag_id='f1_top_speeds_etl_pipeline',
     default_args=default_args,
     schedule_interval=None,
     catchup=False,
@@ -46,34 +45,33 @@ with DAG(
         }
 
     @task()
-    def extract_practice_laps(parameters: dict):
+    def extract_top_speeds(parameters: dict):
         try:
             session = fastf1.get_session(parameters["year"], parameters["round"], parameters["session_name"])
             session.load()
 
-            def format_timedelta(td):
-                if pd.isna(td): return None
-                total_seconds = td.total_seconds()
-                minutes = int(total_seconds // 60)
-                seconds = int(total_seconds % 60)
-                milliseconds = int((total_seconds - int(total_seconds)) * 1000)
-                return f"{minutes:02}:{seconds:02}.{milliseconds:03}"
+            top_speeds = []
 
-            laps = session.laps[['Driver', 'LapTime', 'Compound', 'IsPersonalBest', 'LapNumber']]
-            laps['lapTimeStr'] = laps['LapTime'].apply(format_timedelta)
-            laps = laps.dropna(subset=['lapTimeStr'])
+            for drv in session.drivers:
+                driver_info = session.get_driver(drv)
+                abbreviation = driver_info['Abbreviation']
 
-            lap_data = []
-            for _, row in laps.iterrows():
-                driver_info = session.get_driver(row['Driver'])
-                lap_data.append({
-                    "driver": row['Driver'],
-                    "headshotUrl": driver_info.get('HeadshotUrl'),
-                    "compound": row['Compound'],
-                    "lapTime": row['lapTimeStr'],
-                    "lapNumber": row['LapNumber'],
-                    "isPersonalBest": row['IsPersonalBest'],
-                    "fullName": driver_info.get('FullName'),
+                driver_laps = session.laps.pick_drivers(drv).pick_not_deleted()
+
+                max_speed = 0
+
+                for lap in driver_laps.iterlaps():
+                    try:
+                        telemetry = lap[1]
+                        speed = telemetry['SpeedST']
+                        if speed > max_speed:
+                            max_speed = speed
+                    except Exception as e:
+                        print(f"Error processing telemetry for {abbreviation}: {e}")
+
+                top_speeds.append({
+                    'driver': abbreviation,
+                    'topSpeed': max_speed
                 })
 
             return {
@@ -81,7 +79,7 @@ with DAG(
                 "round": parameters["round"],
                 "sessionName":  parameters["session_name"],
                 "eventFormat": session.event['EventFormat'],
-                "laps": lap_data
+                "speeds": top_speeds
             }
 
         except Exception as e:
@@ -92,7 +90,7 @@ with DAG(
         mongo_hook = MongoHook(conn_id=MONGO_CONN_ID)
         client = mongo_hook.get_conn()
         db = client['pitlap']
-        collection = db['practice_laps']
+        collection = db['top_speeds']
 
         # Upsert based on year + round + session
         query = {
@@ -102,5 +100,5 @@ with DAG(
         }
         collection.update_one(query, {"$set": data}, upsert=True)
 
-    lap_data = extract_practice_laps(validate_params())
+    lap_data = extract_top_speeds(validate_params())
     load_to_mongodb(lap_data)
