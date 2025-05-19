@@ -4,6 +4,7 @@ from airflow.utils.dates import days_ago
 from airflow.providers.mongo.hooks.mongo import MongoHook
 import fastf1
 
+
 default_args = {
     'owner': 'airflow',
     'start_date': days_ago(1),
@@ -25,7 +26,7 @@ with DAG(
     tags=['f1', 'etl'],
     params={
         "year": 2025,
-        "round": 4,
+        "round": 5,
     }
 ) as dag:
 
@@ -71,5 +72,11 @@ with DAG(
                 {"$set": data},
                 upsert=True
             )
+
+    def safe_int(value):
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
 
     load_to_mongodb(extract_race_results(validate_params()))
